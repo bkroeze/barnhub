@@ -1,0 +1,22 @@
+# Copy this file to /etc/systemd/system/barnhub-status.service and adjust the
+# executable, NATS subject, connection, and credential paths for the host.
+[Unit]
+Description=BarnHub NATS status responder
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=barnhub
+Group=barnhub
+ExecStart=/usr/local/bin/barnhub-status \
+    --subject barn.status \
+    --url tls://nats.barnlab \
+    --ca /etc/barnlab/nats/ca.pem \
+    --key /etc/barnlab/nats/user.nk
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
