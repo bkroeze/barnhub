@@ -55,3 +55,15 @@ The process stays running until it receives `SIGINT` or `SIGTERM`, making it sui
 ## Request an answer
 
 Using the NATS CLI or another request client, send a request to the configured subject. The response is JSON containing `status: "healthy"`, a current `timestamp`, and the running server's `hostname`.
+
+## Structured logs
+
+The daemon writes one JSONC-compatible object per line to stdout for lifecycle and
+response events:
+
+```json
+{"event":"startup","timestamp":"2026-09-26T12:34:56.789Z","subject":"barn.status"}
+{"event":"response","timestamp":"2026-09-26T12:35:01.234Z","subject":"barn.status"}
+{"event":"shutdown","timestamp":"2026-09-26T12:40:00.000Z","subject":"barn.status"}
+```
+

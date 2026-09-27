@@ -9,9 +9,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -32,6 +34,34 @@ type statusResponse struct {
 	Timestamp time.Time `json:"timestamp"`
 	Status    string    `json:"status"`
 	Hostname  string    `json:"hostname"`
+}
+
+type logEvent struct {
+	Event     string    `json:"event"`
+	Timestamp time.Time `json:"timestamp"`
+	Subject   string    `json:"subject,omitempty"`
+}
+
+type jsonLogger struct {
+	mu  sync.Mutex
+	out io.Writer
+}
+
+func (l *jsonLogger) write(event, subject string) error {
+	payload, err := json.Marshal(logEvent{
+		Event:     event,
+		Timestamp: time.Now().UTC(),
+		Subject:   subject,
+	})
+	if err != nil {
+		return err
+	}
+	payload = append(payload, '\n')
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, err = l.out.Write(payload)
+	return err
 }
 
 func main() {
@@ -142,6 +172,7 @@ func run(cfg config) error {
 	}
 	defer nc.Drain()
 
+	logger := &jsonLogger{out: os.Stdout}
 	_, err = nc.Subscribe(cfg.Subject, func(msg *nats.Msg) {
 		if msg.Reply == "" {
 			return
@@ -154,7 +185,10 @@ func run(cfg config) error {
 		if marshalErr != nil {
 			return
 		}
-		_ = nc.Publish(msg.Reply, payload)
+		if publishErr := nc.Publish(msg.Reply, payload); publishErr != nil {
+			return
+		}
+		_ = logger.write("response", cfg.Subject)
 	})
 	if err != nil {
 		return fmt.Errorf("subscribe to %q: %w", cfg.Subject, err)
@@ -162,10 +196,14 @@ func run(cfg config) error {
 	if err := nc.Flush(); err != nil {
 		return fmt.Errorf("flush NATS subscription: %w", err)
 	}
+	if err := logger.write("startup", cfg.Subject); err != nil {
+		return fmt.Errorf("write startup log: %w", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	<-ctx.Done()
+	_ = logger.write("shutdown", cfg.Subject)
 	return nil
 }
 

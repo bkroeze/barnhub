@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -85,6 +86,39 @@ func TestStatusResponseIsJSONWithHealthyStatusTimestampAndHostname(t *testing.T)
 		!strings.Contains(payloadText, `"status":"healthy"`) ||
 		!strings.Contains(payloadText, `"hostname":"test-server"`) {
 		t.Fatalf("payload = %s, want status, timestamp, and hostname fields", payload)
+	}
+}
+
+func TestJSONLoggerWritesTimestampedEvents(t *testing.T) {
+	var output bytes.Buffer
+	logger := &jsonLogger{out: &output}
+	before := time.Now().UTC()
+
+	for _, event := range []string{"startup", "response", "shutdown"} {
+		if err := logger.write(event, "barn.status"); err != nil {
+			t.Fatalf("jsonLogger.write(%q) error = %v", event, err)
+		}
+	}
+
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("log lines = %d, want 3", len(lines))
+	}
+	after := time.Now().UTC()
+	for i, wantEvent := range []string{"startup", "response", "shutdown"} {
+		var got logEvent
+		if err := json.Unmarshal([]byte(lines[i]), &got); err != nil {
+			t.Fatalf("log line %d is not JSON: %v", i, err)
+		}
+		if got.Event != wantEvent {
+			t.Errorf("log line %d event = %q, want %q", i, got.Event, wantEvent)
+		}
+		if got.Subject != "barn.status" {
+			t.Errorf("log line %d subject = %q, want barn.status", i, got.Subject)
+		}
+		if got.Timestamp.Before(before) || got.Timestamp.After(after) {
+			t.Errorf("log line %d timestamp %v outside [%v, %v]", i, got.Timestamp, before, after)
+		}
 	}
 }
 
