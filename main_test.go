@@ -56,9 +56,40 @@ func TestParseConfigUsesNATSEnvironmentFallbacks(t *testing.T) {
 	}
 }
 
+func TestResponseSubjectUsesReplyInboxOrHostSuffix(t *testing.T) {
+	if got := responseSubject("barn.status", "_INBOX.reply", "horse"); got != "_INBOX.reply" {
+		t.Fatalf("responseSubject() with reply = %q, want _INBOX.reply", got)
+	}
+	if got := responseSubject("barn.status", "", "horse"); got != "barn.status.horse" {
+		t.Fatalf("responseSubject() without reply = %q, want barn.status.horse", got)
+	}
+}
+
+func TestResponseChannelUsesInboxForReplyOrDestination(t *testing.T) {
+	tests := []struct {
+		name        string
+		reply       string
+		destination string
+		want        string
+	}{
+		{name: "direct inbox", reply: "_INBOX.reply", destination: "_INBOX.reply", want: "inbox"},
+		{name: "direct custom reply", reply: "client.reply", destination: "client.reply", want: "inbox"},
+		{name: "host suffix", destination: "barn.status.horse", want: "barn.status.horse"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := responseChannel(tt.reply, tt.destination); got != tt.want {
+				t.Fatalf("responseChannel(%q, %q) = %q, want %q", tt.reply, tt.destination, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestStatusResponseIsJSONWithHealthyStatusTimestampAndHostname(t *testing.T) {
 	before := time.Now().UTC()
 	payload, err := json.Marshal(statusResponse{
+		Version:   version,
 		Timestamp: time.Now().UTC(),
 		Status:    "healthy",
 		Hostname:  "test-server",
@@ -75,6 +106,9 @@ func TestStatusResponseIsJSONWithHealthyStatusTimestampAndHostname(t *testing.T)
 	if got.Status != "healthy" {
 		t.Fatalf("status = %q, want healthy", got.Status)
 	}
+	if got.Version != version {
+		t.Fatalf("version = %q, want %q", got.Version, version)
+	}
 	if got.Hostname != "test-server" {
 		t.Fatalf("hostname = %q, want test-server", got.Hostname)
 	}
@@ -82,10 +116,11 @@ func TestStatusResponseIsJSONWithHealthyStatusTimestampAndHostname(t *testing.T)
 		t.Fatalf("timestamp %v outside response interval [%v, %v]", got.Timestamp, before, after)
 	}
 	payloadText := string(payload)
-	if !strings.Contains(payloadText, `"timestamp"`) ||
+	if !strings.Contains(payloadText, `"version":"0.1"`) ||
+		!strings.Contains(payloadText, `"timestamp"`) ||
 		!strings.Contains(payloadText, `"status":"healthy"`) ||
 		!strings.Contains(payloadText, `"hostname":"test-server"`) {
-		t.Fatalf("payload = %s, want status, timestamp, and hostname fields", payload)
+		t.Fatalf("payload = %s, want version, status, timestamp, and hostname fields", payload)
 	}
 }
 
@@ -95,7 +130,11 @@ func TestJSONLoggerWritesTimestampedEvents(t *testing.T) {
 	before := time.Now().UTC()
 
 	for _, event := range []string{"startup", "response", "shutdown"} {
-		if err := logger.write(event, "barn.status"); err != nil {
+		channel := ""
+		if event == "response" {
+			channel = "inbox"
+		}
+		if err := logger.write(event, "barn.status", channel); err != nil {
 			t.Fatalf("jsonLogger.write(%q) error = %v", event, err)
 		}
 	}
@@ -115,6 +154,20 @@ func TestJSONLoggerWritesTimestampedEvents(t *testing.T) {
 		}
 		if got.Subject != "barn.status" {
 			t.Errorf("log line %d subject = %q, want barn.status", i, got.Subject)
+		}
+		wantChannel := ""
+		if wantEvent == "response" {
+			wantChannel = "inbox"
+		}
+		if got.Channel != wantChannel {
+			t.Errorf("log line %d channel = %q, want %q", i, got.Channel, wantChannel)
+		}
+		wantVersion := ""
+		if wantEvent == "startup" {
+			wantVersion = version
+		}
+		if got.Version != wantVersion {
+			t.Errorf("log line %d version = %q, want %q", i, got.Version, wantVersion)
 		}
 		if got.Timestamp.Before(before) || got.Timestamp.After(after) {
 			t.Errorf("log line %d timestamp %v outside [%v, %v]", i, got.Timestamp, before, after)

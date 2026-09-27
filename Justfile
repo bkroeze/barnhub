@@ -11,6 +11,15 @@ default: list
 list:
     @just --list --unsorted
 
+
+# Bump the application revision.
+bump-rev:
+    @current=$(sed -nE 's/^const version = "([0-9]+)\.([0-9]+)"$/\1 \2/p' main.go); \
+    test -n "$current" || { echo "version constant not found in main.go" >&2; exit 1; }; \
+    set -- $current; \
+    next=$(($2 + 1)); \
+    sed -i -E "s/^const version = \"[0-9]+\.[0-9]+\"$/const version = \"$1.$next\"/" main.go
+
 # Format all Go packages.
 fmt:
     go fmt ./...

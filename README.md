@@ -3,7 +3,7 @@
 `barnhub-status` is a small NATS request/reply daemon. It listens on a configured subject and replies with a JSON health payload:
 
 ```json
-{"timestamp":"2026-09-26T12:34:56.789Z","status":"healthy","hostname":"barnhub-01"}
+{"version":"0.1","timestamp":"2026-09-26T12:34:56.789Z","status":"healthy","hostname":"barnhub-01"}
 ```
 
 The timestamp is generated for each request in UTC. The hostname identifies the machine running `barnhub-status`.
@@ -22,6 +22,9 @@ Run the checks used before committing:
 just check
 ```
 
+The application revision starts at `0.1` and can be incremented with
+`just bump-rev`.
+
 Build, test, format, inspect dependencies, or remove generated artifacts with
 `just build`, `just test`, `just fmt`, `just deps`, and `just clean`.
 
@@ -38,7 +41,7 @@ just run \
   --key /etc/barnlab/nats/user.nk
 ```
 
-`--subject` is the message key: requests received on that NATS subject are answered. Requests without a reply inbox are ignored, as required for request/reply semantics.
+`--subject` is the message key: requests received on that NATS subject are answered. Requests with a reply inbox are answered there; requests without one are answered on `<subject>.<hostname>` (for example, `barn.status.horse`).
 
 The NATS connection settings also accept the standard NATS environment variable names. A command-line value takes precedence over its environment value:
 
@@ -54,16 +57,17 @@ The process stays running until it receives `SIGINT` or `SIGTERM`, making it sui
 
 ## Request an answer
 
-Using the NATS CLI or another request client, send a request to the configured subject. The response is JSON containing `status: "healthy"`, a current `timestamp`, and the running server's `hostname`.
+Using the NATS CLI or another request client, send a request to the configured subject. The response is JSON containing `version`, `status: "healthy"`, a current `timestamp`, and the running server's `hostname`.
 
 ## Structured logs
 
 The daemon writes one JSONC-compatible object per line to stdout for lifecycle and
-response events:
+response events. Response `channel` is `inbox` for any request with a direct
+reply box; otherwise it is the host-suffixed response subject:
 
 ```json
-{"event":"startup","timestamp":"2026-09-26T12:34:56.789Z","subject":"barn.status"}
-{"event":"response","timestamp":"2026-09-26T12:35:01.234Z","subject":"barn.status"}
+{"event":"startup","version":"0.1","timestamp":"2026-09-26T12:34:56.789Z","subject":"barn.status"}
+{"event":"response","timestamp":"2026-09-26T12:35:01.234Z","subject":"barn.status","channel":"inbox"}
 {"event":"shutdown","timestamp":"2026-09-26T12:40:00.000Z","subject":"barn.status"}
 ```
 

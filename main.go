@@ -22,6 +22,7 @@ import (
 )
 
 const defaultNATSURL = "nats://127.0.0.1:4222"
+const version = "0.1"
 
 type config struct {
 	Subject string
@@ -31,6 +32,7 @@ type config struct {
 }
 
 type statusResponse struct {
+	Version   string    `json:"version"`
 	Timestamp time.Time `json:"timestamp"`
 	Status    string    `json:"status"`
 	Hostname  string    `json:"hostname"`
@@ -38,8 +40,10 @@ type statusResponse struct {
 
 type logEvent struct {
 	Event     string    `json:"event"`
+	Version   string    `json:"version,omitempty"`
 	Timestamp time.Time `json:"timestamp"`
 	Subject   string    `json:"subject,omitempty"`
+	Channel   string    `json:"channel,omitempty"`
 }
 
 type jsonLogger struct {
@@ -47,12 +51,17 @@ type jsonLogger struct {
 	out io.Writer
 }
 
-func (l *jsonLogger) write(event, subject string) error {
-	payload, err := json.Marshal(logEvent{
+func (l *jsonLogger) write(event, subject, channel string) error {
+	eventPayload := logEvent{
 		Event:     event,
 		Timestamp: time.Now().UTC(),
 		Subject:   subject,
-	})
+		Channel:   channel,
+	}
+	if event == "startup" {
+		eventPayload.Version = version
+	}
+	payload, err := json.Marshal(eventPayload)
 	if err != nil {
 		return err
 	}
@@ -62,6 +71,13 @@ func (l *jsonLogger) write(event, subject string) error {
 	defer l.mu.Unlock()
 	_, err = l.out.Write(payload)
 	return err
+}
+
+func responseChannel(reply, destination string) string {
+	if reply != "" {
+		return "inbox"
+	}
+	return destination
 }
 
 func main() {
@@ -133,6 +149,13 @@ func readNKeySeed(value string) ([]byte, error) {
 	return []byte(strings.TrimSpace(value)), nil
 }
 
+func responseSubject(listeningSubject, reply, hostname string) string {
+	if reply != "" {
+		return reply
+	}
+	return listeningSubject + "." + hostname
+}
+
 func run(cfg config) error {
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -174,10 +197,9 @@ func run(cfg config) error {
 
 	logger := &jsonLogger{out: os.Stdout}
 	_, err = nc.Subscribe(cfg.Subject, func(msg *nats.Msg) {
-		if msg.Reply == "" {
-			return
-		}
+		destination := responseSubject(cfg.Subject, msg.Reply, hostname)
 		payload, marshalErr := json.Marshal(statusResponse{
+			Version:   version,
 			Timestamp: time.Now().UTC(),
 			Status:    "healthy",
 			Hostname:  hostname,
@@ -185,10 +207,13 @@ func run(cfg config) error {
 		if marshalErr != nil {
 			return
 		}
-		if publishErr := nc.Publish(msg.Reply, payload); publishErr != nil {
+		if publishErr := nc.Publish(destination, payload); publishErr != nil {
 			return
 		}
-		_ = logger.write("response", cfg.Subject)
+		if destination[:6] == "_INBOX" {
+			destination = "INBOX"
+		}
+		_ = logger.write("response", destination, responseChannel(msg.Reply, destination))
 	})
 	if err != nil {
 		return fmt.Errorf("subscribe to %q: %w", cfg.Subject, err)
@@ -196,14 +221,14 @@ func run(cfg config) error {
 	if err := nc.Flush(); err != nil {
 		return fmt.Errorf("flush NATS subscription: %w", err)
 	}
-	if err := logger.write("startup", cfg.Subject); err != nil {
+	if err := logger.write("startup", cfg.Subject, ""); err != nil {
 		return fmt.Errorf("write startup log: %w", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	<-ctx.Done()
-	_ = logger.write("shutdown", cfg.Subject)
+	_ = logger.write("shutdown", cfg.Subject, "")
 	return nil
 }
 
